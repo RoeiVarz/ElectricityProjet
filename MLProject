@@ -1,0 +1,266 @@
+import warnings
+warnings.filterwarnings("ignore")
+import pandas as pd
+import numpy as np 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import shap
+from sklearn.model_selection import GridSearchCV
+from sklearn.svm import SVR
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SelectKBest, f_regression
+pd.set_option('display.max_columns', None)
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score
+from sklearn.feature_selection import r_regression
+from scipy import stats
+import subprocess
+from sklearn.model_selection import cross_val_score, KFold
+from sklearn.model_selection import cross_val_predict
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import make_scorer
+from sklearn.metrics import mean_squared_error
+
+
+pip install shap
+
+
+# 1. imprort Data
+df= pd.read_csv(r'data/train_df.csv')
+test= pd.read_csv(r'data/test_no_target.csv')
+
+df.isna().sum()
+
+////////////////////////
+2. Clean Data
+2.1 null values -
+
+data types
+outliers
+dummy variables
+drop unrelated columns
+2.1 null values
+I'l drop columns with more than 30 % of the data is null -forecast wind offshore eday ahead ,generation hydro pumped storage aggregated
+impute by interpolate
+///////////////////////
+
+
+df.drop(columns=['forecast wind offshore eday ahead','generation hydro pumped storage aggregated'], inplace=True)
+df = df.interpolate(method='linear', limit_direction='forward', axis=0)
+print("sum of null values:",df.isna().sum().sum())
+
+///////////////////////
+2.2 data types
+I'll convert the next column to informative data type (the goal is that all the clolumn will be int, float or string)
+
+time - change to column of hour
+create dummy features: 'weather_main_Valencia", 'weather_description_Valencia','weather_id_Valencia', 'weather_main_Madrid', ''weather_id_Madrid',"weather_description_Madrid', 'weathermain Barcelona','weatherid Barcelona','weatherdescription Barcelona', 'weather_main_Bilbao','weather_id_Bilbao',''weather_description_Bilbao', 'weather_main_Seville','weather_description_Seville ','weather_description_Seville' ,'hour','day','month'
+////////////////////////
+
+
+
+def create_dummy_variables(df, column_name):
+    # Create dummy variables for the specified column
+    dummies = pd.get_dummies(df[column_name], prefix=column_name)
+
+    # Merge the dummy variables with the original DataFrame
+    df = pd.concat([df, dummies], axis=1)
+
+    # Drop the original column from the DataFrame
+    df.drop(column_name, axis=1, inplace=True)
+
+    return df
+
+
+df["time"]=pd.to_datetime(df["time"])
+df['hour']=df["time"].apply(lambda x: x.hour)
+df['day']=df["time"].apply(lambda x: x.weekday())
+df.drop(columns=['time'],inplace=True)
+
+
+list_column_dummy=['weather_main_Valencia', 'weather_description_Valencia','weather_id_Valencia', 'weather_main_Madrid', 'weather_id_Madrid','weather_description_Madrid', 'weather_main_ Barcelona','weather_id_ Barcelona','weather_description_ Barcelona',
+'weather_main_Bilbao','weather_id_Bilbao','weather_description_Bilbao',
+'weather_main_Seville','weather_description_Seville' ,'hour','day','month']
+for name in list_column_dummy:
+    df=create_dummy_variables(df,name)
+
+#drop index_h column
+df.drop(columns='index_h',inplace=True)
+
+////////////////////////
+3. Data Engineering
+create total generation column- the column sum all the procudced electricity
+create total forecast colum- the column sum all the forecast electricity
+////////////////////////
+
+
+df['total_generation'] = df.iloc[:, 1:21].sum(axis=1)
+df['total_forecast'] = df.iloc[:, 21:23].sum(axis=1)
+////////////////////////
+4. EDA
+create heaetmap which give details on correlation
+create histogram of the the price
+drop irrelaevnt features
+////////////////////////
+
+df_temp=df.iloc[:,:40]
+sns.heatmap(df_temp.corr())
+
+plt.hist(df["price actual"])
+
+
+x=df["total_generation"]
+y=df["price actual"]
+plt.scatter(x, y)
+
+# Add labels and title
+plt.xlabel('Total_generation')
+plt.ylabel('Price')
+plt.title('Total Generation VS Price ')
+
+# Display the plot
+plt.show()
+
+
+# Assuming you have a DataFrame called 'df'
+correlation_matrix = df.corr()
+
+# Find columns with correlation scores less than 0.22
+low_correlation_columns = correlation_matrix[np.abs(correlation_matrix["price actual"])<0.22].index
+# Drop columns with low correlation scores
+df.drop(low_correlation_columns, axis=1, inplace=True)
+
+# Print the updated DataFrame or use it as needed
+df
+
+////////////////////////
+5. ML implementation
+use random forest regressor & SVR
+choose the best algorithm and hypertuning the data
+Use CV 5*2 to get the predcition of the score
+X=df.drop(columns='price actual')
+y=df['price actual']
+X_train, X_test, y_train, y_test = train_test_split( X, y, test_size=0.3, random_state=42)
+
+# hyper tuning optamization SVR
+scaler = StandardScaler()
+param_grid = {
+    'svr__kernel': ['linear', 'poly', 'rbf'],
+    'svr__C': [10, 50, 100,75],
+    'svr__epsilon': [0.1, 0.01,0.2]}
+
+pipe = Pipeline(steps=[("scaler", scaler), ("svr", SVR())])
+
+reg = GridSearchCV(pipe, param_grid,cv=5,scoring='neg_root_mean_squared_error',verbose=1)
+reg.fit(X_train,y_train)
+reg.best_params_
+
+
+#standartization
+scaler = StandardScaler()
+X_train_std=scaler.fit_transform(X_train)
+X_train=pd.DataFrame(data=X_train_std,columns=X_train.columns)
+X_test_std=scaler.transform(X_test)
+X_test=pd.DataFrame(data=X_test_std,columns=X_test.columns)
+
+
+#SVR
+regsvr = SVR(C=100,epsilon=0.2,kernel='rbf')
+regsvr.fit(X_train, y_train)
+pred_SVR=regsvr.predict(X_test)
+print(stats.spearmanr(y_test, pred_SVR))
+print(stats.pearsonr(y_test, pred_SVR))
+print(mean_squared_error(y_test,pred_SVR,squared=False))
+
+
+#random forest regressor
+regr = RandomForestRegressor(max_depth=7,random_state=0,n_estimators=250)
+regr.fit(X_train, y_train)
+pred_rfr=regr.predict(X_test)
+print(stats.spearmanr(y_test, pred_rfr))
+print(stats.pearsonr(y_test, pred_rfr))
+print(mean_squared_error(y_test,pred_rfr,squared=False))
+
+
+6. Export test data
+in the next section we build function that pre-processed the test data , then implement the model over the test data and export it as csv
+
+def preprocess_data(df_t,train_df,low_correlation_columns,keep_columns):
+    """
+    function that take the raw data and pre-process it to cleaned and modified data for the ML model
+    params: df= test dataframe
+            train_Df= original dataframe
+            low_correlation_columns- list of columns with low correlation
+    return: cleaned and modified dataframe
+    """
+    # the df modification- the detaild describtion is during the jupyter notebbok
+    #drop columns
+    df_t.drop(columns=['forecast wind offshore eday ahead','generation hydro pumped storage aggregated'], inplace=True)
+    df_t = df = df_t.interpolate(method='linear', limit_direction='forward', axis=0)
+    #create new features
+    df_t["time"]=pd.to_datetime(df_t["time"])
+    df_t['hour']=df_t["time"].apply(lambda x: x.hour)
+    df_t['day']=df_t["time"].apply(lambda x: x.weekday())
+    df_t.drop(columns=['time'],inplace=True)
+    #create dummy variables
+    list_column_dummy=['weather_main_Valencia', 'weather_description_Valencia','weather_id_Valencia', 'weather_main_Madrid', 'weather_id_Madrid','weather_description_Madrid', 'weather_main_ Barcelona','weather_id_ Barcelona','weather_description_ Barcelona',
+    'weather_main_Bilbao','weather_id_Bilbao','weather_description_Bilbao',
+    'weather_main_Seville','weather_description_Seville' ,'hour','day','month']
+    for name in list_column_dummy:
+        df_t=create_dummy_variables(df_t,name)
+    df_t.drop(columns='index_h',inplace=True)
+    df_t['total_generation'] = df_t.iloc[:, 1:21].sum(axis=1)
+    df_t['total_forecast'] = df_t.iloc[:, 21:23].sum(axis=1)
+    #drop index_h column
+    #drop low_correlation_columns
+    for column in low_correlation_columns:
+        try:
+            df_t.drop(column, axis=1, inplace=True)
+        except:
+            continue
+    #drop columns that doesnt exist in the original df
+    df_t=df_t.loc[:,keep_columns]
+    return df_t
+
+
+# assert preprocess function is working
+keep_columns=X_train.columns.tolist()
+#import data
+test= pd.read_csv(r'data/test_no_target.csv')
+train_df= pd.read_csv(r'data/train_df.csv')
+processed_train=preprocess_data(train_df,train_df,low_correlation_columns,keep_columns)
+X_train_process=processed_train
+#check the data procesing is going well
+assert X_train_process.columns.tolist() == X_train.columns.tolist(), "Columns are not the same"
+assert X_train_process.equals(df.drop(columns=['price actual'])), "Dataframes ascalernot the same"
+
+#import df train and test
+test= pd.read_csv(r'data/test_no_target.csv')
+processed_test=preprocess_data(test,train_df,low_correlation_columns,keep_columns)
+
+
+#train new model with all the train dataframe, then preidct the test data set price
+X_train=X_train_process
+y_train=df['price actual']
+#standartization
+scaler = StandardScaler()
+X_train_std=scaler.fit_transform(X_train)
+X_train=pd.DataFrame(data=X_train_std,columns=X_train.columns)
+processed_test_std=scaler.transform(processed_test)
+processed_test=pd.DataFrame(data=processed_test_std,columns=processed_test.columns)
+#ML model
+regsvr = SVR(C=100,epsilon=0.2,kernel='rbf')
+regsvr.fit(X_train, y_train)
+pred_SVR=regsvr.predict(processed_test)
+
+# export the new csv file with the prediction
+test = pd.read_csv(r'data/test_no_target.csv')
+test["price predicted"] = pred_SVR
+submit_test = test[['index_h', 'price predicted']]
+submit_test.to_csv('submit_test.csv', index=False)
